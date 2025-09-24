@@ -14,7 +14,7 @@ FIGURE_TAG = [
   "Circulo", "Cuadrado", "Triangulo"
 ]
 
-def save_dataset(X, Y):
+def save_dataset(X : list, Y : list) -> None:
   with open('data.csv', 'a', newline='') as file:
     writer = csv.writer(file)
     for x_row, y_val in zip(X, Y):
@@ -25,41 +25,45 @@ class Classifier:
     if os.name == "nt":
       self.webcam = cv.VideoCapture(0, cv.CAP_DSHOW) # WINDOWS
     elif os.name == "posix":
-      self.webcam = cv.VideoCapture(0) # LINUX / OS
+      self.webcam = cv.VideoCapture(2) # LINUX / OS 
 
-    self.C = self.X = self.Y = []
+    self.C = []
+    self.X = []
+    self.Y = []
 
     self.create_menu()
     self.load_contours()
 
-  def create_menu() -> None:
+  def create_menu(self) -> None:
     cv.namedWindow("Manual")
-    cv.createTrackbar("Umbral", "Manual", 40, 255, lambda x: None)
-    cv.createTrackbar("Morfologico", "Manual", 3, 20, lambda x: None)
-    cv.createTrackbar("Area", "Manual", 300, 5000, lambda x: None)
-    cv.createTrackbar("Umbral_Match", "Manual", 0, 100, lambda x: None)
+    cv.createTrackbar("Umbral", "Manual", 140, 255, lambda x: None)
+    cv.createTrackbar("Morfologico", "Manual", 2, 20, lambda x: None)
+    cv.createTrackbar("Area_minima", "Manual", 800, 5000, lambda x: None)
+    cv.createTrackbar("Area_maxima", "Manual", 100000, 600000, lambda x: None)
+    cv.createTrackbar("Umbral_Match", "Manual", 1, 100, lambda x: None)
 
   def load_contours(self):
-    for figure in FIGURE:
-      th_manual = self.threshold_manual(figure)
+    for fig in FIGURE:
+      th_manual = self.threshold_manual(fig)
       frame_morfo = self.morphological_operations(th_manual)
-      cnt = self.find_contours(frame_morfo)[0]
-      self.C.append(cnt)
+      contornos = self.find_contours(frame_morfo)
+      if contornos:
+        self.C.append(contornos[0])
 
-  def threshold_manual(frame):
+  def threshold_manual(self, frame):
     t = cv.getTrackbarPos("Umbral", "Manual")
     _, th_manual = cv.threshold(frame, t, 255, cv.THRESH_BINARY_INV)
     return th_manual
 
-  def threshold_otsu(frame):
+  def threshold_otsu(self, frame):
     _, th_otsu = cv.threshold(frame, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU)
     return th_otsu
 
-  def threshold_triangle(frame):
+  def threshold_triangle(self, frame):
     _, th_triangle = cv.threshold(frame, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_TRIANGLE)
     return th_triangle
   
-  def morphological_operations(frame):
+  def morphological_operations(self, frame):
     ksize = cv.getTrackbarPos("Morfologico", "Manual")
     if ksize < 1: ksize = 1
     kernel = cv.getStructuringElement(cv.MORPH_RECT, (ksize, ksize))
@@ -69,36 +73,40 @@ class Classifier:
 
     return op_clean
   
-  def find_contours(frame):
+  def find_contours(self, frame):
     contours, _ = cv.findContours(frame, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)
-    min_area = cv.getTrackbarPos("Area", "Manual")
-    contours_filtered = [cnt for cnt in contours if cv.contourArea(cnt) > min_area]
+    min_area = cv.getTrackbarPos("Area_minima", "Manual")
+    max_area = cv.getTrackbarPos("Area_maxima", "Manual")
+    contours_filtered = [
+      cnt for cnt in contours if (min_area <= cv.contourArea(cnt) <= max_area)
+    ]
     return contours_filtered
   
   def process_contours(self, frame, contours):
+    threshold_match = cv.getTrackbarPos("Umbral_Match", "Manual") / 100
+    figures = []
+
     for cnt in contours:
-      #cv.drawContours(frame, [contorno], -1, (0,255,0), 2)
-  
       x, y, w, h = cv.boundingRect(cnt)
-
-      threshold_match = cv.getTrackbarPos("Umbral_Match", "Manual") / 100
-
+    
       best : str = None
       min_distance : float = float('inf')
+
       for index, contorno_ref in enumerate(self.C):
         distance = cv.matchShapes(cnt, contorno_ref, cv.CONTOURS_MATCH_I1, 0.0)
         if distance < min_distance:
-            min_distance = distance
-            best = FIGURE_TAG[index]
+          min_distance = distance
+          best = FIGURE_TAG[index]
 
-      if min_distance < threshold_match:
-        cv.putText(frame, f"{best}", (x, y-10),
-                  cv.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
-        cv.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-      else:
-        cv.putText(frame, "Desconocido", (x, y-10),
-                  cv.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 1)
-        cv.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+      figures.append((cnt, best if min_distance <= threshold_match else "Desconocido", x, y, w, h))
+
+    return figures
+
+  def draw_figures(self, frame, figures):
+    for _, tag, x, y, w, h in figures:
+      colour = (0,255,0) if tag != "Desconocido" else (0,0,255)
+      cv.putText(frame, f"{tag}", (x, y-10), cv.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1)
+      cv.rectangle(frame, (x, y), (x+w, y+h), colour, 2)
 
   def run(self):
     while True:
@@ -114,26 +122,33 @@ class Classifier:
 
       contours = self.find_contours(frame_morfo)
 
-      self.process_contours(frame, contours)
+      figures = self.process_contours(frame, contours)
 
+      self.draw_figures(frame, figures)
+      cv.putText(frame, f"Figuras detectadas: {len(contours)}", (5, 20), cv.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 255), 1)
       cv.imshow("Debug", frame_morfo)
       cv.imshow("Manual", frame)
   
       key = cv.waitKey(30) & 0xFF
 
-      if key == ord('q'): break
+      if key == ord('q'): 
+        break
 
-      if key == ord('c') and contours:
-        nombre = input("Ingrese etiqueta de esta forma: ")
-        for index, cnt in enumerate(contours):
-          self.C.append(cnt.copy())
-          self.X.append(cv.HuMoments(cv.moments(cnt)).flatten().tolist())
-          self.Y.append(nombre)
-          print(f"Guardado contorno de referencia: {nombre}")
+      if key == ord('c') and figures:
+        for cnt, label, _, _, _, _ in figures:
+          if label != "Desconocido":
+            self.X.append(cv.HuMoments(cv.moments(cnt)).flatten().tolist())
+            self.Y.append(label)
+            print(f"Guardado contorno de referencia: {label}")
+      
+      if key == ord('g'):
+        save_dataset(self.X, self.Y)
 
-
-    def __del__(self):
-      self.webcam.release()
+  def __del__(self):
+    self.webcam.release()
       
 cv.destroyAllWindows()
     
+if __name__ == "__main__":
+  csf = Classifier()
+  csf.run()
