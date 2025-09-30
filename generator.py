@@ -1,20 +1,38 @@
-import joblib 
-import numpy as np
-import os
 import cv2 as cv
+import os
+import csv
 
-class Classifier:
+SIZE_IMG = (256, 256)
+
+FIGURE = [
+  cv.resize(cv.imread('./assets/circle.png', cv.IMREAD_GRAYSCALE), SIZE_IMG),
+  cv.resize(cv.imread('./assets/square.png', cv.IMREAD_GRAYSCALE), SIZE_IMG),
+  cv.resize(cv.imread('./assets/triangle.png', cv.IMREAD_GRAYSCALE), SIZE_IMG)
+]
+
+FIGURE_TAG = [
+  "Circulo", "Cuadrado", "Triangulo"
+]
+
+def save_dataset(X : list, Y : list) -> None:
+  with open('./data/dataset.csv', 'a', newline='') as file:
+    writer = csv.writer(file)
+    for x_row, y_val in zip(X, Y):
+        writer.writerow(x_row + [y_val])
+
+class Generator:
   def __init__(self):
-    try:
-      self.model = joblib.load('./models/tree_model.joblib')
-      if os.name == "nt":
-        self.webcam = cv.VideoCapture(0, cv.CAP_DSHOW) # WINDOWS
-      elif os.name == "posix":
-        self.webcam = cv.VideoCapture(2) # LINUX / OS 
-    except:
-      print("No existe el modelo.")
+    if os.name == "nt":
+      self.webcam = cv.VideoCapture(0, cv.CAP_DSHOW) # WINDOWS
+    elif os.name == "posix":
+      self.webcam = cv.VideoCapture(2) # LINUX / OS 
+
+    self.C = []
+    self.X = []
+    self.Y = []
 
     self.create_menu()
+    self.load_contours()
 
   def create_menu(self) -> None:
     cv.namedWindow("Manual")
@@ -22,11 +40,28 @@ class Classifier:
     cv.createTrackbar("Morfologico", "Manual", 2, 20, lambda x: None)
     cv.createTrackbar("Area_minima", "Manual", 800, 5000, lambda x: None)
     cv.createTrackbar("Area_maxima", "Manual", 100000, 600000, lambda x: None)
+    cv.createTrackbar("Umbral_Match", "Manual", 1, 100, lambda x: None)
+
+  def load_contours(self):
+    for fig in FIGURE:
+      th_manual = self.threshold_manual(fig)
+      frame_morfo = self.morphological_operations(th_manual)
+      contornos = self.find_contours(frame_morfo)
+      if contornos:
+        self.C.append(contornos[0])
 
   def threshold_manual(self, frame):
     t = cv.getTrackbarPos("Umbral", "Manual")
     _, th_manual = cv.threshold(frame, t, 255, cv.THRESH_BINARY_INV)
     return th_manual
+
+  def threshold_otsu(self, frame):
+    _, th_otsu = cv.threshold(frame, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU)
+    return th_otsu
+
+  def threshold_triangle(self, frame):
+    _, th_triangle = cv.threshold(frame, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_TRIANGLE)
+    return th_triangle
   
   def morphological_operations(self, frame):
     ksize = cv.getTrackbarPos("Morfologico", "Manual")
@@ -46,26 +81,27 @@ class Classifier:
       cnt for cnt in contours if (min_area <= cv.contourArea(cnt) <= max_area)
     ]
     return contours_filtered
-
+  
   def process_contours(self, contours):
+    threshold_match = cv.getTrackbarPos("Umbral_Match", "Manual") / 100
     figures = []
 
     for cnt in contours:
       x, y, w, h = cv.boundingRect(cnt)
+    
+      best : str = None
+      min_distance : float = float('inf')
 
-      moments = cv.moments(cnt)
-      hu_moments = cv.HuMoments(moments).flatten().tolist()
-      descriptor = np.array(hu_moments).reshape(1, -1)
+      for index, contorno_ref in enumerate(self.C):
+        distance = cv.matchShapes(cnt, contorno_ref, cv.CONTOURS_MATCH_I1, 0.0)
+        if distance < min_distance:
+          min_distance = distance
+          best = FIGURE_TAG[index]
 
-      probs = self.model .predict_proba(descriptor)[0]
-      best_idx = np.argmax(probs)
-      best_proba = probs[best_idx]
-      prediccion = self.model .classes_[best_idx]
-
-      figures.append((cnt, prediccion, x, y, w, h))
+      figures.append((cnt, best if min_distance <= threshold_match else "Desconocido", x, y, w, h))
 
     return figures
-  
+
   def draw_figures(self, frame, figures):
     for _, tag, x, y, w, h in figures:
       colour = (0,255,0) if tag != "Desconocido" else (0,0,255)
@@ -95,13 +131,24 @@ class Classifier:
   
       key = cv.waitKey(30) & 0xFF
 
-      if key == ord('q'): break
-  
+      if key == ord('q'): 
+        break
+
+      if key == ord('c') and figures:
+        for cnt, label, _, _, _, _ in figures:
+          if label != "Desconocido":
+            self.X.append(cv.HuMoments(cv.moments(cnt)).flatten().tolist())
+            self.Y.append(label)
+            print(f"Guardado contorno de referencia: {label}")
+      
+      if key == ord('g'):
+        save_dataset(self.X, self.Y)
+
   def __del__(self):
     self.webcam.release()
-  
+      
 cv.destroyAllWindows()
     
 if __name__ == "__main__":
-  csf = Classifier()
-  csf.run()
+  gen = Generator()
+  gen.run()

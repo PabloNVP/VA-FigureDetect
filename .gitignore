@@ -172,9 +172,5 @@ poetry.toml
 # LSP config files
 pyrightconfig.json
 
-# Results Model
-results/
-models/
-
 ### End of Python ###
 
